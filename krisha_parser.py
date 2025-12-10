@@ -26,7 +26,7 @@ PARSE_CONFIG = {
 # PARSE_CONFIG = {'city': 'astana', 'districts': ['almatinskij', 'esilskij', 'nura']}
 
 # 4 чел Астана (3 района):
-# PARSE_CONFIG = {'city': 'astana', 'districts': ['saryarkinskij', 'bajkonyrskij', 'saraishyk']}
+# PARSE_CONFIG = {'city': 'astana', 'districts': ['saryarkinskij', 'bajkonur', 'saraishyk']}
 
 # словари районов: ключ -> (название, слаг для URL)
 # ВАЖНО: слаги на krisha.kz: almaty-bostandykskij (не almaty-bostandyk!)
@@ -37,7 +37,7 @@ ALMATY_DISTRICTS = {
     'bostandykskij': ('Бостандыкский р-н', 'almaty-bostandykskij'),
     'zhetysuskij': ('Жетысуский р-н', 'almaty-zhetysuskij'),
     'medeuskij': ('Медеуский р-н', 'almaty-medeuskij'),
-    'nauryzbajskij': ('Наурызбайский р-н', 'almaty-nauryzbajskij'),
+    'nauryzbajskij': ('Наурызбайский р-н', 'almaty-nauryzbajskiy'),
     'turksibskij': ('Турксибский р-н', 'almaty-turksibskij'),
 }
 
@@ -46,7 +46,7 @@ ASTANA_DISTRICTS = {
     'esilskij': ('Есильский р-н', 'astana-esilskij'),
     'nura': ('Нура р-н', 'astana-nura'),
     'saryarkinskij': ('Сарыаркинский р-н', 'astana-saryarkinskij'),
-    'bajkonyrskij': ('Байконурский р-н', 'astana-bajkonyrskij'),
+    'bajkonur': ('Байконурский р-н', 'r-n-bajkonur'),  # особый слаг!
     'saraishyk': ('Сарайшык р-н', 'astana-saraishyk'),
 }
 
@@ -261,10 +261,18 @@ def extract_furnished(text: str) -> Optional[str]:
 
 
 def extract_district_clean(address: str) -> Optional[str]:
-    """извлекает чистое название района"""
-    match = re.search(r'([А-Яа-яЁё]+(?:ий|ый|ой)?)\s*р-н', address)
+    """извлекает чистое название района - поддержка всех форматов krisha.kz"""
+    
+    # Формат 1: "Алматы р-н" или "Бостандыкский р-н" (название перед р-н)
+    match = re.search(r'([А-Яа-яЁё]+(?:ий|ый|ой|ы|а)?)\s*р-н', address)
     if match:
         return match.group(1)
+    
+    # Формат 2: "р-н Байконур" (р-н перед названием)
+    match = re.search(r'р-н\s+([А-Яа-яЁё]+)', address)
+    if match:
+        return match.group(1)
+    
     return None
 
 
@@ -517,11 +525,11 @@ def matches_district(data: Dict, target_district: str, all_districts: Dict) -> b
         'nauryzbajskij': ['наурызбай'],
         'turksibskij': ['турксиб'],
         # Астана
-        'almatinskij': ['алматин'],
+        'almatinskij': ['алматы'],  # на сайте "Алматы р-н"
         'esilskij': ['есиль', 'есил', 'есильск'],
         'nura': ['нура'],
-        'saryarkinskij': ['сарыарк', 'сарыарка'],
-        'bajkonyrskij': ['байконыр', 'байконур'],
+        'saryarkinskij': ['сарыарк', 'сарыарка'],  # на сайте "Сарыарка р-н"
+        'bajkonur': ['байконыр', 'байконур'],  # на сайте "р-н Байконур"
         'saraishyk': ['сарайшык'],
     }
     
