@@ -4,20 +4,56 @@ import pandas as pd
 import time
 import random
 import re
+import os
 from typing import List, Dict, Optional
 
 
 # конфиг
 
-# базовые urk для парсинга (продажа квартир)
-# Алматы: /prodazha/kvartiry/almaty/
-# Астана: /prodazha/kvartiry/astana/
-BASE_URLS = {
-    'Алматы': 'https://krisha.kz/prodazha/kvartiry/almaty/',
-    'Астана': 'https://krisha.kz/prodazha/kvartiry/astana/'
+# выбор города и районов для парсинга
+# измени под себя
+PARSE_CONFIG = {
+    'city': 'all',  # 'all', 'almaty', 'astana'
+    'districts': []  # пустой = все районы, или ['bostandykskij', 'medeusskij']
 }
 
-# Список User-Agent для ротации (типо браузер)
+# если распределять то 1 чел Алматы (4 района):
+# PARSE_CONFIG = {'city': 'almaty', 'districts': ['almalinskij', 'bostandykskij', 'auezovskij', 'medeusskij']}
+
+# 2 чел Алматы (4 района):
+# PARSE_CONFIG = {'city': 'almaty', 'districts': ['zhylyojskij', 'nauryzbajskij', 'turksibskij', 'alatausckij']}
+
+# 3 чел- Астана (2 района):
+# PARSE_CONFIG = {'city': 'astana', 'districts': ['almatinskij', 'bayjkonyrskij']}
+
+# 4 чел- Астана (2 района):
+# PARSE_CONFIG = {'city': 'astana', 'districts': ['esil', 'saryarkinskij']}
+
+# районы Алматы
+ALMATY_DISTRICTS = {
+    'almalinskij': 'Алмалинский р-н',
+    'bostandykskij': 'Бостандыкский р-н', 
+    'auezovskij': 'Ауэзовский р-н',
+    'medeusskij': 'Медеуский р-н',
+    'zhylyojskij': 'Жетысуский р-н',
+    'nauryzbajskij': 'Наурызбайский р-н',
+    'turksibskij': 'Турксибский р-н',
+    'alatausckij': 'Алатауский р-н'
+}
+
+# районы Астаны
+ASTANA_DISTRICTS = {
+    'almatinskij': 'Алматинский р-н',
+    'bayjkonyrskij': 'Байконурский р-н',
+    'esil': 'Есильский р-н',
+    'saryarkinskij': 'Сарыаркинский р-н'
+}
+
+BASE_URLS = {
+    'almaty': 'https://krisha.kz/prodazha/kvartiry/almaty/',
+    'astana': 'https://krisha.kz/prodazha/kvartiry/astana/'
+}
+
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -27,24 +63,36 @@ USER_AGENTS = [
 ]
 
 # настройки парсинга
-MAX_PAGES = 5  # максимальное количество страниц для парсинга (потом можно изменить)
-MIN_DELAY = 2  # минимальная задержка между запросами (в сек)
-MAX_DELAY = 5  # максимальная задержка между запросами (в сек)
-REQUEST_TIMEOUT = 30  # таймаут запроса (в сек)
+MAX_PAGES = 100
+REQUEST_TIMEOUT = 30
 
+# паузы как в kolesa
+MIN_DELAY = 45
+MAX_DELAY = 80
+MIN_PAGE_DELAY = 15
+MAX_PAGE_DELAY = 30
+
+# длинные перерывы как в kolesa
+LONG_BREAK_MIN = 120
+LONG_BREAK_MAX = 300
+BREAK_AFTER_MIN = 4
+BREAK_AFTER_MAX = 7
+
+# сохранение
+SAVE_EVERY = 5
 
 
 # вспомог функции
 
-# создаём сессию для сохранения cookies между запросами
 session = requests.Session()
+df = pd.DataFrame()
+iteration_cnt = 0
+save_cnt = 0
+overall_cnt = 0
+break_threshold = random.randint(BREAK_AFTER_MIN, BREAK_AFTER_MAX)
 
 
 def get_random_headers() -> Dict[str, str]:
-    """
-    возвращает случайные HTTP-заголовки для имитации браузера
-    помогает избежать блокировки со стороны сайта
-    """
     return {
         'User-Agent': random.choice(USER_AGENTS),
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -53,131 +101,108 @@ def get_random_headers() -> Dict[str, str]:
     }
 
 
-def random_delay():
-    """
-    добавляет случайную задержку между запросами
-    важно для Anti-detect сайт не заблокирует айпишник
-    """
-    delay = random.uniform(MIN_DELAY, MAX_DELAY)
+def random_delay(min_d=None, max_d=None):
+    if min_d is None:
+        min_d = MIN_DELAY
+    if max_d is None:
+        max_d = MAX_DELAY
+    delay = random.uniform(min_d, max_d)
     print(f"ожидание {delay:.1f} секунд...")
     time.sleep(delay)
 
 
+def long_break():
+    delay = random.uniform(LONG_BREAK_MIN, LONG_BREAK_MAX)
+    print(f"\nдлинный перерыв {delay/60:.1f} минут...")
+    time.sleep(delay)
+
+
+def save_data(dataframe, csv_file):
+    if dataframe.empty:
+        return
+    if not os.path.isfile(csv_file):
+        dataframe.to_csv(csv_file, mode='w', index=False, header=True, encoding='utf-8-sig')
+        print(f'создан файл {csv_file}')
+    else:
+        dataframe.to_csv(csv_file, mode='a', index=False, header=False, encoding='utf-8-sig')
+    print(f'сохранено {len(dataframe)} записей в {csv_file}\n')
+
+
 def make_request(url: str) -> Optional[BeautifulSoup]:
-    """
-    выполняет GET-запрос к указанному URL.
-    возвращает объект BeautifulSoup или None в случае ошибки.
-    """
     global session
     try:
         headers = get_random_headers()
-        
-        # используем сессию для сохранения cookies
         response = session.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()  # проверяем статус ответа
-        
-        # устанавливаем правильную кодировку
+        response.raise_for_status()
         response.encoding = 'utf-8'
-        
-        # парсим HTML с помощью BeautifulSoup
         soup = BeautifulSoup(response.text, 'html.parser')
         return soup
-    
     except requests.exceptions.RequestException as e:
         print(f"ошибка при запросе {url}: {e}")
         return None
 
 
-# функция парсинга
+def build_url(base_url: str, district: str = None) -> str:
+    if district:
+        return f"{base_url}?das[region]={district}"
+    return base_url
+
+
+# функции парсинга
 
 def get_listing_links(soup: BeautifulSoup) -> List[str]:
-    """
-    извлекает ссылки на объявления со страницы списка.
-    
-    структура krisha.kz:
-    Ссылки на объявления имеют формат /a/show/XXXXXX
-    """
     links = []
-    seen = set()  # для избежания дубликатов
-    
-    # получаем весь HTML как строку
+    seen = set()
     html_text = str(soup)
-    
-    # ищем все ссылки на объявления через regex
     pattern = r'href=["\']([^"\']*?/a/show/(\d+))[^"\']*["\']'
     matches = re.findall(pattern, html_text)
     
     for href, listing_id in matches:
-        # формируем чистый URL
         clean_url = f'https://krisha.kz/a/show/{listing_id}'
-        
-        # добавляем только уникальные ссылки
         if clean_url not in seen:
             seen.add(clean_url)
             links.append(clean_url)
-    
     return links
 
 
 def parse_listing_page(soup: BeautifulSoup, city: str) -> Dict[str, str]:
-    """
-    парсит страницу отдельного объявления.
-    извлекает: заголовок, описание, цену, адрес.
-    
-    аргументы:
-        soup: BeautifulSoup объект страницы объявления
-        city: Название города (Алматы или Астана)
-    
-    возвращает:
-        словарь с данными объявления
-    """
     data = {
         'title': '',
         'description': '',
         'price': '',
         'address': '',
+        'district': '',
         'city': city,
         'url': ''
     }
     
     try:
-        # заголовок находится в теге <title> или <h1>
         title_tag = soup.find('h1')
         if title_tag:
             data['title'] = title_tag.get_text(strip=True)
         else:
-            # альтернативно из тега title
             title_tag = soup.find('title')
             if title_tag:
                 data['title'] = title_tag.get_text(strip=True).split(' — ')[0]
     except Exception as e:
-        print(f"    ⚠️ Ошибка при извлечении заголовка: {e}")
+        print(f"ошибка заголовка: {e}")
     
     try:
-        # ищем текст после "Описание" в странице
-        # описание обычно в теге с классом или data-атрибутом
-        
-        # способ 1: Ищем div с текстом описания
         desc_text = ""
-        
-        # ищем все текстовые блоки и фильтруем
         for div in soup.find_all(['div', 'p']):
             text = div.get_text(strip=True)
-            # описание обычно длинное и содержит характерные слова
             if len(text) > 100 and ('квартир' in text.lower() or 'комнат' in text.lower() or 
                                      'ремонт' in text.lower() or 'этаж' in text.lower() or
                                      'район' in text.lower() or 'дом' in text.lower()):
                 if len(text) > len(desc_text):
                     desc_text = text
         
-        # способ 2: ищем текст который начинается с эмодзи или определенных слов
         if not desc_text:
             all_text = soup.get_text(separator='\n')
             lines = all_text.split('\n')
             for i, line in enumerate(lines):
                 line = line.strip()
                 if ('Описание' in line and len(line) < 20) or line.startswith('♥'):
-                    # собираем следующие строки как описание
                     desc_lines = []
                     for j in range(i, min(i+50, len(lines))):
                         if lines[j].strip() and 'Цена м2' not in lines[j]:
@@ -186,208 +211,229 @@ def parse_listing_page(soup: BeautifulSoup, city: str) -> Dict[str, str]:
                             break
                     desc_text = ' '.join(desc_lines)
                     break
-        
-        data['description'] = desc_text[:5000] if desc_text else ""  # ограничиваем длину
-        
+        data['description'] = desc_text[:5000] if desc_text else ""
     except Exception as e:
-        print(f"ошибка при извлечении описания: {e}")
+        print(f"ошибка описания: {e}")
     
     try:
-        # цена обычно содержит символ тенге (〒) или слово "млн"
         price_text = ""
         for tag in soup.find_all(['div', 'span']):
             text = tag.get_text(strip=True)
             if '〒' in text and len(text) < 50:
-                # проверяем что это цена (содержит число)
                 if any(char.isdigit() for char in text):
                     price_text = text
                     break
-        
         if not price_text:
-            # ищем текст вида "XX млн"
             all_text = soup.get_text()
             price_match = re.search(r'(\d[\d\s]*(?:млн|000\s*000)?\s*〒)', all_text)
             if price_match:
                 price_text = price_match.group(1).strip()
-        
         data['price'] = price_text
-        
     except Exception as e:
-        print(f"    ⚠️ Ошибка при извлечении цены: {e}")
+        print(f"ошибка цены: {e}")
     
     try:
-        # адрес обычно содержит "р-н" (район) или название улицы
         address_text = ""
-        
-        # ищем в тексте после "Город"
+        district_text = ""
         all_text = soup.get_text()
         if 'Город' in all_text:
-            # Ищем текст после "Город"
             idx = all_text.find('Город')
             chunk = all_text[idx:idx+200]
-            # Извлекаем адрес
             lines = chunk.split('\n')
             for line in lines[1:5]:
                 line = line.strip()
                 if line and 'показать' not in line.lower():
                     address_text = line
+                    if 'р-н' in line:
+                        district_text = line.split(',')[0] if ',' in line else line
                     break
-        
         if not address_text:
-            # Иием текст с названием района
             for tag in soup.find_all(['div', 'span']):
                 text = tag.get_text(strip=True)
                 if 'р-н' in text and len(text) < 100:
                     address_text = text
+                    district_text = text.split(',')[0] if ',' in text else text
                     break
-        
         data['address'] = address_text
-        
+        data['district'] = district_text
     except Exception as e:
-        print(f"ошибка при извлечении адреса: {e}")
+        print(f"ошибка адреса: {e}")
     
     return data
 
 
-def check_next_page(soup: BeautifulSoup, current_page: int) -> bool:
-    """
-    Проверяет есть ли следующая страница в пагинации
-    """
-    # ищем пагинацию
+def check_next_page(soup: BeautifulSoup) -> bool:
     pagination = soup.find('nav', class_='paginator')
     if pagination:
-        # проверяем есть ли ссылка на след страницу
         next_link = pagination.find('a', class_='paginator__btn--next')
         if next_link and not next_link.get('disabled'):
             return True
     return False
 
 
-# основной функционал парсера
+# основной функционал
 
-def parse_city(city: str, base_url: str) -> List[Dict[str, str]]:
-    """
-    парсит все объявления для указанного города.
+def parse_city_district(city_key: str, city_name: str, district_key: str = None, district_name: str = None) -> List[Dict[str, str]]:
+    global df, iteration_cnt, save_cnt, overall_cnt, break_threshold
     
-    аргументы:
-        city: название города
-        base_url: базовый URL для парсинга
-    
-    возвращает:
-        список словарей с данными объявлений
-    """
     all_listings = []
     page = 1
+    base_url = BASE_URLS[city_key]
     
-    print(f"парсинг города: {city}")
+    safe_city = city_key.lower()
+    safe_district = district_key if district_key else 'all'
+    csv_file = f'./krisha_{safe_city}_{safe_district}.csv'
+    
+    print(f"\n{'='*60}")
+    if district_name:
+        print(f"парсинг: {city_name} -> {district_name}")
+    else:
+        print(f"парсинг города: {city_name}")
+    print(f"файл: {csv_file}")
+    print(f"{'='*60}")
     
     while page <= MAX_PAGES:
-        if page == 1:
-            page_url = base_url
-        else:
-            page_url = f"{base_url}?page={page}"
-        
-        print(f"страница {page}: {page_url}")
-        
-        # получаем страницу со списком объявлений
-        soup = make_request(page_url)
-        if not soup:
-            print(f"не удалось загрузить страницу {page}")
-            break
-        
-        # извлекаем ссылки на объявления
-        links = get_listing_links(soup)
-        print(f"найдено объявлений на странице: {len(links)}")
-        
-        if not links:
-            print("объявления не найдены завершаем парсинг города")
-            break
-        
-        # парсим каждое объявление
-        for i, link in enumerate(links, 1):
-            print(f"    [{i}/{len(links)}] Парсинг: {link}")
-            
-            # задержка перед запросом (Anti-detect)
-            random_delay()
-            
-            # загружаем страницу объявления
-            listing_soup = make_request(link)
-            if not listing_soup:
-                print(f"не удалось загрузить объявление")
-                continue
-            
-            # аарсим данные объявления
-            listing_data = parse_listing_page(listing_soup, city)
-            listing_data['url'] = link
-            
-            # добавляем в список если есть хотя бы заголовок или описание
-            if listing_data['title'] or listing_data['description']:
-                all_listings.append(listing_data)
-                print(f"успех : {listing_data['title'][:50]}...")
+        try:
+            if page == 1:
+                page_url = build_url(base_url, district_key)
             else:
-                print(f"пустое объявление пропускаем")
-        
-        # чекаем есть ли следующая страница
-        if not check_next_page(soup, page):
-            print(f"\n последняя страница")
+                separator = '&' if district_key else '?'
+                page_url = build_url(base_url, district_key) + f"{separator}page={page}"
+            
+            print(f"\nстраница {page}: {page_url}")
+            
+            soup = make_request(page_url)
+            if not soup:
+                print(f"не удалось загрузить страницу {page}")
+                break
+            
+            links = get_listing_links(soup)
+            print(f"найдено объявлений: {len(links)}")
+            
+            if not links:
+                print("объявления не найдены, завершаем")
+                break
+            
+            for i, link in enumerate(links, 1):
+                print(f"[{i}/{len(links)}] {link}")
+                
+                random_delay()
+                
+                listing_soup = make_request(link)
+                if not listing_soup:
+                    print("не удалось загрузить")
+                    continue
+                
+                listing_data = parse_listing_page(listing_soup, city_name)
+                listing_data['url'] = link
+                listing_data['dtime_inserted'] = pd.Timestamp.now(tz="Asia/Almaty").isoformat()
+                
+                if listing_data['title'] or listing_data['description']:
+                    all_listings.append(listing_data)
+                    new_row = pd.DataFrame([listing_data])
+                    df = pd.concat([df, new_row], ignore_index=True, sort=False)
+                    print(f"успех: {listing_data['title'][:40]}...")
+                else:
+                    print("пустое объявление")
+                
+                iteration_cnt += 1
+                save_cnt += 1
+                overall_cnt += 1
+                
+                if save_cnt >= SAVE_EVERY:
+                    save_data(df, csv_file)
+                    save_cnt = 0
+                    df = pd.DataFrame()
+                
+                if iteration_cnt >= break_threshold:
+                    long_break()
+                    iteration_cnt = 0
+                    break_threshold = random.randint(BREAK_AFTER_MIN + 3, BREAK_AFTER_MAX + 5)
+            
+            if not check_next_page(soup):
+                print("\nпоследняя страница")
+                break
+            
+            page += 1
+            if page <= MAX_PAGES:
+                print("\nпауза между страницами")
+                random_delay(MIN_PAGE_DELAY, MAX_PAGE_DELAY)
+                
+        except Exception as e:
+            print(f"\nошибка: {e}")
+            if not df.empty:
+                save_data(df, csv_file)
+                df = pd.DataFrame()
+            print(f"остановка на странице {page}, собрано: {overall_cnt}")
             break
-        
-        page += 1
-        random_delay()  # задержка перед следующей страницей
     
-    print(f"\n город {city}: собрано {len(all_listings)} объявлений")
+    if not df.empty:
+        save_data(df, csv_file)
+        df = pd.DataFrame()
+    
+    location_str = f"{city_name} - {district_name}" if district_name else city_name
+    print(f"\n{location_str}: собрано {len(all_listings)} объявлений")
     return all_listings
 
 
-def main():
-    print("парсер")
-    print("цель: сбор данных")
-    print("города: Алматы, Астана")
-    print("категория: Продажа квартир")
+def main():    
+    config_city = PARSE_CONFIG['city']
+    config_districts = PARSE_CONFIG['districts']
+    
+    print(f"\nконфиг:")
+    print(f"город: {config_city}")
+    print(f"районы: {config_districts if config_districts else 'все'}")
+    print(f"страниц: {MAX_PAGES}")
+    print(f"задержка: {MIN_DELAY}-{MAX_DELAY} сек")
+    print(f"перерыв: каждые {BREAK_AFTER_MIN}-{BREAK_AFTER_MAX} запросов")
     
     all_data = []
     
-    # парсим каждый город
-    for city, base_url in BASE_URLS.items():
-        try:
-            city_data = parse_city(city, base_url)
-            all_data.extend(city_data)
-        except Exception as e:
-            print(f"\n ошибка при парсинге {city}: {e}")
-            continue
-    
-    # сохраняем результаты
-    if all_data:
-        print("сохранение данных")
-        
-        # создаем DataFrame
-        df = pd.DataFrame(all_data)
-        
-        # сохраняем в CSV
-        output_file = 'krisha_dataset.csv'
-        df.to_csv(output_file, index=False, encoding='utf-8-sig')
-        
-        print(f"\nданные сохранены в файл: {output_file}")
-        print(f"📊 всего объявлений: {len(df)}")
-        print(f"\n📋 структура датасета:")
-        print(df.info())
-        print(f"\n📝 первые 3 записи:")
-        print(df.head(3))
-        
-        # статистика по городам
-        print(f"статистика по городам:")
-        print(df['city'].value_counts())
-        
-        # статистика по заполненности описаний
-        non_empty_desc = df[df['description'].str.len() > 0].shape[0]
-        print(f"\n обьявления с описанием: {non_empty_desc}/{len(df)}")
-        
+    if config_city == 'all':
+        cities = [
+            ('almaty', 'Алматы', ALMATY_DISTRICTS),
+            ('astana', 'Астана', ASTANA_DISTRICTS)
+        ]
+    elif config_city == 'almaty':
+        cities = [('almaty', 'Алматы', ALMATY_DISTRICTS)]
+    elif config_city == 'astana':
+        cities = [('astana', 'Астана', ASTANA_DISTRICTS)]
     else:
-        print("error")
+        print(f"неизвестный город: {config_city}")
+        return
     
-
-    print("end")
-
+    for city_idx, (city_key, city_name, all_districts) in enumerate(cities):
+        if config_districts:
+            districts = [(k, v) for k, v in all_districts.items() if k in config_districts]
+            if not districts:
+                print(f"\nне найдены районы {config_districts} для {city_name}")
+                continue
+        else:
+            districts = [(None, None)]
+        
+        for district_idx, (district_key, district_name) in enumerate(districts):
+            try:
+                data = parse_city_district(city_key, city_name, district_key, district_name)
+                all_data.extend(data)
+                
+                if district_idx < len(districts) - 1:
+                    print(f"\nпауза перед следующим районом")
+                    time.sleep(60)
+            except Exception as e:
+                loc = f"{city_name} - {district_name}" if district_name else city_name
+                print(f"\nошибка при парсинге {loc}: {e}")
+                continue
+        
+        if city_idx < len(cities) - 1:
+            print(f"\nпауза перед следующим городом...")
+            time.sleep(60)
+    
+    if all_data:
+        print(f"\nитого собрано: {len(all_data)} объявлений")
+    else:
+        print("\nданные не собраны")
+    
+    print("\nend")
 
 
 if __name__ == "__main__":
