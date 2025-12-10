@@ -20,15 +20,16 @@ PARSE_CONFIG = {
 # PARSE_CONFIG = {'city': 'almaty', 'districts': ['almalinskij', 'bostandykskij', 'aujezovskij', 'medeuskij']}
 
 # 2 чел Алматы (4 района):
-# PARSE_CONFIG = {'city': 'almaty', 'districts': ['zhetysuskij', 'nauryzbajskiy', 'turksibskij', 'alatauskij']}
+# PARSE_CONFIG = {'city': 'almaty', 'districts': ['zhetysuskij', 'nauryzbajskij', 'turksibskij', 'alatauskij']}
 
 # 3 чел Астана (3 района):
 # PARSE_CONFIG = {'city': 'astana', 'districts': ['almatinskij', 'esilskij', 'nura']}
 
 # 4 чел Астана (3 района):
-# PARSE_CONFIG = {'city': 'astana', 'districts': ['saryarkinskij', 'bajkonur', 'saraishyk']}
+# PARSE_CONFIG = {'city': 'astana', 'districts': ['saryarkinskij', 'bajkonyrskij', 'saraishyk']}
 
 # словари районов: ключ -> (название, слаг для URL)
+# ВАЖНО: слаги на krisha.kz: almaty-bostandykskij (не almaty-bostandyk!)
 ALMATY_DISTRICTS = {
     'alatauskij': ('Алатауский р-н', 'almaty-alatauskij'),
     'almalinskij': ('Алмалинский р-н', 'almaty-almalinskij'),
@@ -36,7 +37,7 @@ ALMATY_DISTRICTS = {
     'bostandykskij': ('Бостандыкский р-н', 'almaty-bostandykskij'),
     'zhetysuskij': ('Жетысуский р-н', 'almaty-zhetysuskij'),
     'medeuskij': ('Медеуский р-н', 'almaty-medeuskij'),
-    'nauryzbajskiy': ('Наурызбайский р-н', 'almaty-nauryzbajskiy'),
+    'nauryzbajskij': ('Наурызбайский р-н', 'almaty-nauryzbajskij'),
     'turksibskij': ('Турксибский р-н', 'almaty-turksibskij'),
 }
 
@@ -45,7 +46,7 @@ ASTANA_DISTRICTS = {
     'esilskij': ('Есильский р-н', 'astana-esilskij'),
     'nura': ('Нура р-н', 'astana-nura'),
     'saryarkinskij': ('Сарыаркинский р-н', 'astana-saryarkinskij'),
-    'bajkonur': ('Байконурский р-н', 'r-n-bajkonur'),
+    'bajkonyrskij': ('Байконурский р-н', 'astana-bajkonyrskij'),
     'saraishyk': ('Сарайшык р-н', 'astana-saraishyk'),
 }
 
@@ -449,12 +450,16 @@ def parse_listing_page(soup: BeautifulSoup, city: str, url: str) -> Dict:
             idx = full_text.find('Город')
             chunk = full_text[idx:idx+300]
             lines = chunk.split('\n')
-            for line in lines[1:5]:
+            # ищем в первых 15 строках (много пустых строк из-за HTML)
+            for line in lines[1:15]:
                 line = line.strip()
-                if line and 'показать' not in line.lower():
-                    data['address'] = line
-                    data['district'] = extract_district_clean(line)
-                    break
+                if line and 'р-н' in line:
+                    # убираем служебный текст "показать на карте"
+                    candidate = re.sub(r'показать на карте', '', line, flags=re.IGNORECASE).strip()
+                    if candidate:
+                        data['address'] = candidate
+                        data['district'] = extract_district_clean(candidate)
+                        break
     except Exception as e:
         print(f"ошибка address: {e}")
     
@@ -509,14 +514,14 @@ def matches_district(data: Dict, target_district: str, all_districts: Dict) -> b
         'bostandykskij': ['бостандык', 'бостандыкс'],
         'zhetysuskij': ['жетысу'],
         'medeuskij': ['медеу'],
-        'nauryzbajskiy': ['наурызбай'],
+        'nauryzbajskij': ['наурызбай'],
         'turksibskij': ['турксиб'],
         # Астана
         'almatinskij': ['алматин'],
         'esilskij': ['есиль', 'есил', 'есильск'],
         'nura': ['нура'],
         'saryarkinskij': ['сарыарк', 'сарыарка'],
-        'bajkonur': ['байконыр', 'байконур'],
+        'bajkonyrskij': ['байконыр', 'байконур'],
         'saraishyk': ['сарайшык'],
     }
     
@@ -736,4 +741,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
