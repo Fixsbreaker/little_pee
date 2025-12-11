@@ -125,7 +125,7 @@ def is_ban_error(error_str: str) -> bool:
 
 def handle_ban_cooldown():
     """Обработка бана - пауза"""
-    print(f"\n[BAN]  Обнаружен бан! Пауза {BAN_COOLDOWN // 60} минут...")
+    print(f"\n[BAN] ⚠️ Обнаружен бан! Пауза {BAN_COOLDOWN // 60} минут...")
     for i in range(BAN_COOLDOWN, 0, -60):
         print(f"[BAN] Осталось {i // 60} мин...")
         time.sleep(60)
@@ -133,7 +133,7 @@ def handle_ban_cooldown():
 
 
 
-def make_driver(headless: bool = False, mobile_ua: bool = True, use_profile: bool = False) -> webdriver.Chrome:
+def make_driver(headless: bool = False, mobile_ua: bool = False, use_profile: bool = False) -> webdriver.Chrome:
     """Создание Chrome драйвера с CapSolver расширением"""
     
     opts = Options()
@@ -144,9 +144,9 @@ def make_driver(headless: bool = False, mobile_ua: bool = True, use_profile: boo
     # Загружаем CapSolver расширение ЧЕРЕЗ --load-extension (работает!)
     if os.path.exists(CAPSOLVER_EXTENSION_PATH):
         opts.add_argument(f"--load-extension={CAPSOLVER_EXTENSION_PATH}")
-        print(f"[CAPSOLVER]  Расширение будет загружено")
+        print(f"[CAPSOLVER] ✓ Расширение будет загружено")
     else:
-        print(f"[CAPSOLVER]  Расширение не найдено: {CAPSOLVER_EXTENSION_PATH}")
+        print(f"[CAPSOLVER] ⚠️ Расширение не найдено: {CAPSOLVER_EXTENSION_PATH}")
     
     if headless:
         # Headless mode с расширениями требует новый режим
@@ -216,39 +216,63 @@ def try_solve_recaptcha(driver: webdriver.Chrome, timeout: int = 120) -> bool:
     while time.time() - start < timeout:
         # Проверяем исчезновение капчи
         if not detect_recaptcha(driver):
-            print("[CAPTCHA]  Капча решена!")
+            print("[CAPTCHA] ✓ Капча решена!")
             return True
         
         # Проверяем появление телефонов
         phones = driver.find_elements(By.XPATH, "//a[starts-with(@href, 'tel:')]")
         if phones:
-            print("[CAPTCHA]  Телефоны появились!")
+            print("[CAPTCHA] ✓ Телефоны появились!")
             return True
         
         time.sleep(2)
     
-    print("[CAPTCHA]  Таймаут решения капчи")
+    print("[CAPTCHA] ✗ Таймаут решения капчи")
     return False
 
 def try_get_phones(driver: webdriver.Chrome, timeout: int = 10) -> Optional[List[str]]:
-    """Извлечение телефонов со страницы"""
+    """Извлечение телефонов со страницы (links + text regex)"""
     start = time.time()
     
     while time.time() - start < timeout:
-        elements = driver.find_elements(By.XPATH, "//a[starts-with(@href, 'tel:')]")
         phones = []
         
-        for el in elements:
-            href = el.get_attribute("href") or ""
-            if href.startswith("tel:"):
-                phone = href[4:].strip()
-                # Нормализация
-                phone = re.sub(r'[^\d+]', '', phone)
-                if phone and phone not in phones:
-                    phones.append(phone)
+        # 1. Ищем ссылки tel:
+        try:
+            elements = driver.find_elements(By.XPATH, "//a[starts-with(@href, 'tel:')]")
+            for el in elements:
+                href = el.get_attribute("href") or ""
+                if href.startswith("tel:"):
+                    phone = href[4:].strip()
+                    phone = re.sub(r'[^\d+]', '', phone)
+                    if phone and phone not in phones:
+                        phones.append(phone)
+        except:
+            pass
         
+        # 2. Ищем в тексте страницы (широкий поиск)
+        try:
+            body_text = driver.find_element(By.TAG_NAME, "body").text
+            # Regex для разных форматов (+7 777..., 8 777..., 8(777)...)
+            patterns = [
+                r'(?:\+7|8)\s*\(?\d{3}\)?\s*\d{3}\s*\d{2}\s*\d{2}', 
+                r'(?:\+7|8)\s*\d{3}\s*\d{3}\s*\d{3,4}'
+            ]
+            
+            for pat in patterns:
+                found = re.findall(pat, body_text)
+                if found:
+                    for raw_phone in found:
+                         clean_phone = re.sub(r'[^\d+]', '', raw_phone)
+                         # Валидация длины (KZ номера ~11 цифр)
+                         if 10 <= len(clean_phone) <= 12 and clean_phone not in phones:
+                             phones.append(clean_phone)
+        except Exception as e:
+            # print(f"[DBG] Text search error: {e}")
+            pass
+            
         if phones:
-            return phones
+            return list(set(phones))
         
         time.sleep(0.5)
     
@@ -331,20 +355,20 @@ def perform_login(driver: webdriver.Chrome, phone: str, password: str) -> bool:
         # Проверка успеха - редирект или наличие меню пользователя
         if "krisha.kz/my" in driver.current_url or "login" not in driver.current_url:
              IS_LOGGED_IN = True
-             print("[LOGIN] Успех!")
+             print("[LOGIN] ✓ Успех!")
              return True
         else:
-             print("[LOGIN]  Не уверен в успехе, URL остался: " + driver.current_url)
+             print("[LOGIN] ? Не уверен в успехе, URL остался: " + driver.current_url)
              # Проверим наличие элемента профиля
              if driver.find_elements(By.CLASS_NAME, "cabinet-link-item") or driver.find_elements(By.ID, "ab-header-user-menu"):
                  IS_LOGGED_IN = True
-                 print("[LOGIN]  Успех (профиль найден)!")
+                 print("[LOGIN] ✓ Успех (профиль найден)!")
                  return True
                  
         return False
         
     except Exception as e:
-        print(f"[LOGIN]  Ошибка: {e}")
+        print(f"[LOGIN] ✗ Ошибка: {e}")
         return False
 
 
@@ -533,6 +557,10 @@ def reveal_phone_on_page(driver: webdriver.Chrome, url: str, phone: str, passwor
     if not call_button:
         # Пробуем другие селекторы
         for xpath in [
+            "//button[contains(@class, 'show-phones')]",
+            "//*[contains(text(), 'Показать телефон')]",
+            "//button[contains(., 'Показать телефон')]",
+            "//div[contains(@class, 'offer__contacts-phones')]//*[contains(text(), 'Показать')]",
             "//button[@data-test='call-button']",
             "//a[contains(@class, 'phone')]",
             "//div[contains(@class, 'phone')]//button"
@@ -549,13 +577,31 @@ def reveal_phone_on_page(driver: webdriver.Chrome, url: str, phone: str, passwor
         if phones:
             PROCESSED_URLS_HISTORY.append(url)
             return phones, {**meta, "status": "ok_visible"}
+
         return None, {**meta, "error": "no_button"}
     
     # Скроллим к кнопке и кликаем
     try:
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", call_button)
         time.sleep(0.5)
-        human_like_click(driver, call_button)
+        
+        # Если это не кнопка, а текст/div (как в новой верстке), пробуем кликнуть
+        # или навести мышь, чтобы появилась кнопка .show-phones
+        if call_button.tag_name != "button":
+            action = ActionChains(driver)
+            action.move_to_element(call_button).click().perform()
+            time.sleep(1)
+            
+            # Проверяем, появилась ли специфичная кнопка .show-phones
+            try:
+                real_btn = driver.find_element(By.CLASS_NAME, "show-phones")
+                human_like_click(driver, real_btn)
+                time.sleep(1)
+            except:
+                pass
+        else:
+            human_like_click(driver, call_button)
+            
         print("[CLICK] Кликнул кнопку телефона")
         time.sleep(3.5)
     except Exception as e:
@@ -578,12 +624,23 @@ def reveal_phone_on_page(driver: webdriver.Chrome, url: str, phone: str, passwor
                 driver.get(url)
                 time.sleep(3)
                 
-                # Снова кликаем кнопку
+                # Повторный поиск и клик
                 try:
+                    # Ищем снова, так как DOM обновился
                     call_button = WebDriverWait(driver, 10).until(
-                        EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'телефон') or contains(., 'Позвонить')]"))
+                        EC.presence_of_element_located((By.XPATH, "//button[contains(., 'телефон') or contains(., 'Позвонить')] | //div[contains(., 'Показать телефон')]"))
                     )
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", call_button)
                     human_like_click(driver, call_button)
+                    
+                     # Проверяем show-phones
+                    try:
+                         time.sleep(1)
+                         real_btn = driver.find_element(By.CLASS_NAME, "show-phones")
+                         human_like_click(driver, real_btn)
+                    except:
+                         pass
+                         
                     time.sleep(3.5)
                 except:
                     pass
@@ -595,7 +652,7 @@ def reveal_phone_on_page(driver: webdriver.Chrome, url: str, phone: str, passwor
     phones = try_get_phones(driver, timeout=8)
     
     if phones:
-        print(f"[PHONE]  Найдено {len(phones)} без капчи: {', '.join(phones)}")
+        print(f"[PHONE] ✓ Найдено {len(phones)} без капчи: {', '.join(phones)}")
         PROCESSED_URLS_HISTORY.append(url)
         return phones, {**meta, "status": "ok"}
     
@@ -603,7 +660,7 @@ def reveal_phone_on_page(driver: webdriver.Chrome, url: str, phone: str, passwor
     print("[PHONE] Телефонов нет, проверяю капчу...")
     
     if detect_recaptcha(driver):
-        print("[CAPTCHA]  Обнаружена! Жду решения от CapSolver...")
+        print("[CAPTCHA] ✓ Обнаружена! Жду решения от CapSolver...")
         if not try_solve_recaptcha(driver):
             return None, {**meta, "error": "captcha_timeout"}
         
@@ -611,7 +668,7 @@ def reveal_phone_on_page(driver: webdriver.Chrome, url: str, phone: str, passwor
         phones = try_get_phones(driver, timeout=15)
         
         if phones:
-            print(f"[PHONE]  После капчи: {', '.join(phones)}")
+            print(f"[PHONE] ✓ После капчи: {', '.join(phones)}")
             PROCESSED_URLS_HISTORY.append(url)
             return phones, {**meta, "status": "ok_after_captcha"}
         else:
@@ -671,10 +728,10 @@ def main():
     
     if args.capsolver_key:
         CAPSOLVER_API_KEY = args.capsolver_key
-        print(f"[CAPSOLVER]  API ключ установлен")
+        print(f"[CAPSOLVER] ✓ API ключ установлен")
     
     if not args.phone or not args.password:
-        print("[WARN] Логин/пароль не заданы! Телефоны могут быть недоступны.")
+        print("[WARN] ⚠️ Логин/пароль не заданы! Телефоны могут быть недоступны.")
     
     # Выходной файл
     output_file = args.output or f"krisha_{city}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -689,7 +746,7 @@ def main():
     print(f"{'='*60}\n")
     
     # Создаём драйвер
-    driver = make_driver(headless=args.headless, mobile_ua=True)
+    driver = make_driver(headless=args.headless, mobile_ua=False)
     
     all_results = []
     processed = 0
@@ -733,7 +790,7 @@ def main():
                         if phones:
                             listing_data["phones"] = ",".join(phones)
                             listing_data["phone_status"] = "ok"
-                            print(f"[OK]  {', '.join(phones)}")
+                            print(f"[OK] ✓ {', '.join(phones)}")
                             CONSECUTIVE_ERRORS = 0
                         else:
                             listing_data["phones"] = ""
@@ -741,19 +798,19 @@ def main():
                             
                             if meta.get("is_ban"):
                                 CONSECUTIVE_ERRORS += 1
-                                print(f"[BAN?] Ошибка ({CONSECUTIVE_ERRORS}/{MAX_ERRORS_BEFORE_BAN})")
+                                print(f"[BAN?] ⚠️ Ошибка ({CONSECUTIVE_ERRORS}/{MAX_ERRORS_BEFORE_BAN})")
                                 
                                 if CONSECUTIVE_ERRORS >= MAX_ERRORS_BEFORE_BAN:
                                     handle_ban_cooldown()
                                     CONSECUTIVE_ERRORS = 0
                                     
                                     driver.quit()
-                                    driver = make_driver(headless=args.headless, mobile_ua=True)
+                                    driver = make_driver(headless=args.headless, mobile_ua=False)
                                     IS_LOGGED_IN = False
                             else:
                                 CONSECUTIVE_ERRORS = 0
                             
-                            print(f"[MISS]  {meta.get('error', '?')}")
+                            print(f"[MISS] ✗ {meta.get('error', '?')}")
                         
                         listing_data["parsed_at"] = now_iso()
                         all_results.append(listing_data)
@@ -764,11 +821,11 @@ def main():
                     except KeyboardInterrupt:
                         raise
                     except Exception as e:
-                        print(f"[ERR]  {e!r}")
+                        print(f"[ERR] ✗ {e!r}")
                         
                         if "session" in str(e).lower():
                             driver.quit()
-                            driver = make_driver(headless=args.headless, mobile_ua=True)
+                            driver = make_driver(headless=args.headless, mobile_ua=False)
                             IS_LOGGED_IN = False
                     
                     # Долгая пауза
@@ -802,3 +859,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
